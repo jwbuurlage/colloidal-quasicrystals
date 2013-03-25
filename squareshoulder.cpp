@@ -39,6 +39,7 @@ double epsilon = 0.0;
 double pstart = 0.0;
 double pend = 0.0;
 double dp = 0.0;
+int num_cycles = 0;
 
 // for negative modulo VERY INEFFICIENT FOR LARGE NUMBERS
 inline int small_mod(int a, int b)
@@ -557,17 +558,19 @@ void run()
 
 int main(int argc, char* argv[])
 {
-    if(argc != 6)
+    if(argc != 7)
     {
-        cout << "Usage: ./sqsh lambda epsilon pstart pend dp" << endl;
+        cout << "Usage: ./sqsh MCS lambda epsilon pstart pend dp" << endl;
+        cout << "This will heat at pstart for 3*MCS and then spend MCS for every pressure in (pstart, pstart+dp, ..., pend)" << endl;
         return 0;
     }
 
-    lambda  = atof(argv[1]);
-    epsilon = atof(argv[2]);
-    pstart  = atof(argv[3]);
-    pend    = atof(argv[4]);
-    dp      = atof(argv[5]);
+    num_cycles = atoi(argv[1]);
+    lambda  = atof(argv[2]);
+    epsilon = atof(argv[3]);
+    pstart  = atof(argv[4]);
+    pend    = atof(argv[5]);
+    dp      = atof(argv[6]);
 
     run();
 
