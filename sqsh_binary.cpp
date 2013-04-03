@@ -31,9 +31,11 @@ boost::random::uniform_int_distribution<> ui(0, 100000);
 // CONSTANTS
 /////////////////////////////////
 
-#define fccsize 30
+#define fccsize 15
 #define N_POINTS (fccsize * fccsize * 2)
 #define SIGMA 1.0
+double size1 = 0.3;
+double size2 = 1.0;
 double lambda = 0.0;
 double epsilon = 0.0;
 double pstart = 0.0;
@@ -121,20 +123,38 @@ struct cell
 
 struct particle
 {
-    particle(pos _p, int _cx, int _cy)
+    particle(pos _p, int _cx, int _cy, 
+			double _sigma, double _lambda)
     {
         p = _p;
         cx = _cx;
         cy = _cy;
+		sigma = _sigma;
+		lambda = _lambda;
     }
+
+	double radius()
+	{
+		return 0.5 * sigma;
+	}
 
     pos p;
     int cx;
     int cy;
 
+	double sigma;
+	double lambda; // 'hairs' reach out till lambda*sigma
+
     // maybe..
     double e;
 };
+
+bool overlap(particle& a, particle& b, double boxSize)
+{
+	if(image_distance_2(a.p, b.p, boxSize) < (a.radius() + b.radius()) * (a.radius() + b.radius()))
+		return true;
+	return false;
+}
 
 vector<particle> points;
 cell cells[N_POINTS][N_POINTS];
@@ -167,12 +187,12 @@ void initialize_points()
     for(int i = 0; i < fccsize; ++i)
         for(int j = 0; j < fccsize; ++j)
             points.push_back(particle(pos(-1.0 + outerOffset*(i + 0.5),
-                            -1.0 + outerOffset*(j + 0.5)), 0, 0));
+                            -1.0 + outerOffset*(j + 0.5)), 0, 0, size1, 1.4));
 
     for(int i = 0; i < fccsize; ++i)
-        for(int j = 0; j < fccsize; ++j)
+        for(int j = 0; j < 4.0*fccsize; ++j)
             points.push_back(particle(pos(-1.0 + outerOffset + innerOffset*i,
-                            -1.0 + outerOffset + innerOffset*j), 0, 0));
+                            -1.0 + outerOffset + (0.25*innerOffset)*j), 0, 0, size2, 1.4));
 }
 
 
@@ -209,13 +229,14 @@ void optimize_cells(double boxSize)
 }
 
 // physical quantities
-inline double potential(pos p1, pos p2, double boxSize)
+inline double potential(particle p1, particle p2, double boxSize)
 {
-    return image_distance_2(p1, p2, boxSize) < lambda*lambda ? epsilon : 0.0;
+    return image_distance_2(p1.p, p2.p, boxSize) < 
+				pow((p1.lambda*p1.radius()+p2.lambda*p2.radius()),2) ? epsilon : 0.0;
 }
 
 // energy of a single particle
-double energy_at_point(double boxSize, int index, pos newPos)
+double energy_at_point(double boxSize, int index, particle newParticle)
 {
     double energy = 0.0;
     int cx = points[index].cx;
@@ -229,7 +250,7 @@ double energy_at_point(double boxSize, int index, pos newPos)
             for(unsigned int i = 0; i < c->cell_points.size(); ++i)
             {
                 if(c->cell_points[i] == index) continue;
-                energy += potential(points[c->cell_points[i]].p, newPos, boxSize);
+                energy += potential(points[c->cell_points[i]], newParticle, boxSize);
             }
         }
 
@@ -243,12 +264,15 @@ double recalculate_system_energy(double boxSize, vector<double> &container)
 
     for(unsigned int i = 0; i < points.size(); ++i)
     {
-        container[i] = energy_at_point(boxSize, i, points[i].p);
+        container[i] = energy_at_point(boxSize, i, points[i]);
         energy += container[i];
     }
 
+	// TODO: do we count them twice? or is it an individual contribution
     // we counted interactions twice
-    return energy * 0.5;
+    // return energy * 0.5;
+	
+	return energy;
 }
 
 // output
@@ -273,7 +297,7 @@ void write_snapshot_to_file(double boxSize, int MCS, double pressure)
 {
     // open and save file snapshot_MCS.dat
     ostringstream filenamestream;
-    filenamestream << "configs/configuration_" << points.size() << "_" << lambda << "_" << epsilon << "_" << pressure << "_" << MCS << ".dat"; // c, n_particles, lambda, pressure, MCS
+    filenamestream << "configs_binary/configuration_" << points.size() << "_" << lambda << "_" << epsilon << "_" << pressure << "_" << MCS << ".dat"; // c, n_particles, lambda, pressure, MCS
     string s = filenamestream.str();
     ofstream fout(s.c_str());
 
@@ -290,7 +314,7 @@ void write_snapshot_to_file(double boxSize, int MCS, double pressure)
 
     // particle coordinates
     for(unsigned int i = 0; i < points.size(); ++i)
-        fout << points[i].p.x << " " << points[i].p.y << " " << 0.0 << " " << SIGMA << " " << 0 << endl;
+        fout << points[i].p.x << " " << points[i].p.y << " " << 0.0 << " " << points[i].sigma << " " << ((points[i].sigma == size1) ? 0 : 1) << endl;
 
     // close file
     fout.close();
@@ -300,10 +324,12 @@ bool particle_move(int index, double jumpSize, double boxSize)
 {
     pos newPos = pos(points[index].p.x + rand(-1.0, 1.0) * jumpSize,
             points[index].p.y + rand(-1.0, 1.0) * jumpSize);
+	particle newParticle = points[index];
+	newParticle.p = newPos;
     restrict_to_volume(&newPos, boxSize);
 
     double new_total_energy = total_energy;
-    double new_contribution = energy_at_point(boxSize, index, newPos);
+    double new_contribution = energy_at_point(boxSize, index, newParticle);
     new_total_energy -= energy_contribution_of_particle[index];
     new_total_energy += new_contribution;
 
@@ -322,7 +348,7 @@ bool particle_move(int index, double jumpSize, double boxSize)
             for(unsigned int i = 0; i < c->cell_points.size(); ++i)
             {
                 if(c->cell_points[i] == index) continue;
-                if(image_distance_2(newPos, points[c->cell_points[i]].p, boxSize) < SIGMA*SIGMA)
+                if(overlap(newParticle, points[c->cell_points[i]], boxSize))
                     return false;
             }
         }
@@ -346,7 +372,7 @@ bool particle_move(int index, double jumpSize, double boxSize)
             for(unsigned int i = 0; i < c->cell_points.size(); ++i)
             {
                 if(c->cell_points[i] == index) continue;
-                energy_contribution_of_particle[c->cell_points[i]] -= potential(points[index].p, points[c->cell_points[i]].p, boxSize);
+                energy_contribution_of_particle[c->cell_points[i]] -= potential(points[index], points[c->cell_points[i]], boxSize);
             }
         }
 
@@ -357,7 +383,7 @@ bool particle_move(int index, double jumpSize, double boxSize)
             for(unsigned int i = 0; i < c->cell_points.size(); ++i)
             {
                 if(c->cell_points[i] == index) continue;
-                energy_contribution_of_particle[c->cell_points[i]] += potential(newPos, points[c->cell_points[i]].p, boxSize);
+                energy_contribution_of_particle[c->cell_points[i]] += potential(newParticle, points[c->cell_points[i]], boxSize);
             }
         }
 
@@ -416,7 +442,7 @@ bool volume_move(double pressure, double vJumpSize, double &boxSize)
                 for(unsigned int j = 0; j < c->cell_points.size(); ++j)
                 {
                     if(c->cell_points[j] == (int)i) continue;
-                    if(image_distance_2(points[i].p, points[c->cell_points[j]].p, newBoxSize) < SIGMA*SIGMA)
+                    if(overlap(points[i], points[c->cell_points[j]], newBoxSize))
                     {
                         // reset points and nothing else happens 
                         for(unsigned int i = 0; i < points.size(); ++i)
@@ -441,36 +467,14 @@ bool volume_move(double pressure, double vJumpSize, double &boxSize)
 
 void step(int& accepted, int& vAccepted, double jumpSize, double vJumpSize, double &boxSize, double pressure)
 {
-    /* timeval t1, t2;
-       double elapsedTime;
-
-    // start timer
-    gettimeofday(&t1, NULL); */
-
     for(unsigned int i = 0; i < points.size(); ++i)
     {
         if(particle_move(rand(points.size()), jumpSize, boxSize))
             accepted++;
     }
 
-    /* // stop timer
-       gettimeofday(&t2, NULL);
-
-       elapsedTime = (t2.tv_sec - t1.tv_sec) * 1000.0;      // sec to ms
-       elapsedTime += (t2.tv_usec - t1.tv_usec) / 1000.0;   // us to ms
-       cout << "particle: " << elapsedTime << " ms.\n";
-
-
-       gettimeofday(&t1, NULL); */
-
     if(volume_move(pressure, vJumpSize, boxSize))
         vAccepted++;
-
-    /* gettimeofday(&t2, NULL);
-
-       elapsedTime = (t2.tv_sec - t1.tv_sec) * 1000.0;      // sec to ms
-       elapsedTime += (t2.tv_usec - t1.tv_usec) / 1000.0;   // us to ms
-       cout << "volume: " << elapsedTime << " ms.\n"; */
 }
 
 void run()
@@ -479,7 +483,7 @@ void run()
     double boxSize = 10.0;
     double jumpSize = 1.0;
     double vJumpSize = 10.0;
-    double initialDensity = 0.06;
+    double initialDensity = 0.50;
     set_density(initialDensity, boxSize);
     optimize_cells(boxSize);
 
@@ -561,9 +565,9 @@ void run()
 
 int main(int argc, char* argv[])
 {
-    if(argc != 7)
+    if(argc != 9)
     {
-        cout << "Usage: ./sqsh MCS lambda epsilon pstart pend dp" << endl;
+        cout << "Usage: ./sqsh MCS lambda epsilon pstart pend dp size1 size2" << endl;
         cout << "This will heat at pstart for 3*MCS and then spend MCS for every pressure in (pstart, pstart+dp, ..., pend)" << endl;
         return 0;
     }
@@ -574,6 +578,8 @@ int main(int argc, char* argv[])
     pstart  = atof(argv[4]);
     pend    = atof(argv[5]);
     dp      = atof(argv[6]);
+	size1	= atof(argv[7]);
+	size2	= atof(argv[8]);
 
     run();
 
